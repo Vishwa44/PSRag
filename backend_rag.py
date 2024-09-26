@@ -39,7 +39,7 @@ def query_openai_api(query: str, context: str):
     api_key="xx",
 )
     response = client.chat.completions.create(
-        model="gpt-3.5-turbo",  # or "gpt-4", depending on your access
+        model="gpt-4o-mini",  # or "gpt-4", depending on your access
         messages=[
             {"role": "system", "content": "You are a helpful assistant for the website PartSelect that answers questions based on provided context. Don't mention anything about the context when answering"},
             {"role": "user", "content": prompt}
