@@ -13,14 +13,16 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 from openai import OpenAI
 import os
-# Define FastAPI app
+import time
+from collections import deque
+
 app = FastAPI()
 
-# Global variables to store loaded data
 vector_store = None
 ensemble_retriever = None
+CHAT_HISTORY_LIMIT = 5
+chat_history = deque(maxlen=CHAT_HISTORY_LIMIT)
 
-# Load required files (done once on startup)
 def load_files():
     with open("all_rawtexts.pkl", "rb") as filehandler:
         all_rawtexts = pickle.load(filehandler)
@@ -31,15 +33,18 @@ def load_files():
     print("loading done")
     return all_rawtexts, document_list, uidlist
 
-# Calling OpenAI ChatGPT API for question answering
-def query_openai_api(query: str, context: str):
-    prompt = f"User question: {query}\n\nRelevant context: {context}\n\nAnswer based on the context:"
-    client = OpenAI(
-    # This is the default and can be omitted
-    api_key=os.environ.get('OPENAI_KEY'),
-)
+def query_openai_api(query: str, context: str, chat_history):
+    history = ""
+    print("chat_history len", len(chat_history))
+    if chat_history:
+        history = "\n\n".join([f"User: {item['query']}\nContext: {item['context']}" for item in chat_history])
+
+    prompt = f"{history}\n\nUser question: {query}\n\nRelevant context: {context}\n\nAnswer based on the context:"
+    # print("Prompt: ", prompt)
+    client = OpenAI(api_key=os.environ.get('OPENAI_KEY'))
+
     response = client.chat.completions.create(
-        model="gpt-4o-mini",  # or "gpt-4", depending on your access
+        model="gpt-4o-mini",
         messages=[
             {"role": "system", "content": "You are a helpful assistant for the website PartSelect that answers questions based on provided context. Don't mention anything about the context when answering"},
             {"role": "user", "content": prompt}
@@ -47,16 +52,13 @@ def query_openai_api(query: str, context: str):
     )
     return response
 
-# Function to initialize retrievers (done once on startup)
 def initialize_retrievers():
     global vector_store, ensemble_retriever
 
     all_rawtexts, document_list, uidlist = load_files()
 
-    # Set up embeddings
     embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
 
-    # Initialize FAISS index
     index = faiss.IndexFlatL2(len(embeddings.embed_query("hello world")))
     vector_store = FAISS(
         embedding_function=embeddings,
@@ -65,29 +67,23 @@ def initialize_retrievers():
         index_to_docstore_id={},
     )
     
-    # Add documents to the vector store
     vector_store.add_documents(documents=document_list, ids=uidlist)
 
-    # Create BM25 and FAISS retrievers
     retriever_bm25 = BM25Retriever.from_documents(document_list)
     retriever_bm25.k = 2
     faiss_retriever = vector_store.as_retriever(search_kwargs={"k": 5})
 
-    # Ensemble the retrievers
     ensemble_retriever = EnsembleRetriever(retrievers=[retriever_bm25, faiss_retriever], weights=[0.5, 0.5])
 
     print("Retrievers initialized")
 
-# Run this function when the app starts
 @app.on_event("startup")
 def on_startup():
     initialize_retrievers()
 
-# Pydantic model for input validation
 class QueryInput(BaseModel):
     query: str
 
-# Main API endpoint for querying
 @app.post("/query")
 async def query_api(query_input: QueryInput):
     global ensemble_retriever
@@ -96,13 +92,20 @@ async def query_api(query_input: QueryInput):
     if ensemble_retriever is None:
         return {"error": "Retrievers not initialized"}
 
-    # Retrieve documents based on the query
+    st = time.time()
     docs = ensemble_retriever.invoke(query_text)
+    print("Retrieval time: ", time.time()-st)
     top_docs = [i.page_content for i in docs]
 
     context = "\n\n".join(top_docs)
+    print(context)
+    chat_history.append({
+        "query": query_text,
+        "context": context
+    })
 
-    openai_response = query_openai_api(query_text, context)
+    st = time.time()
+    openai_response = query_openai_api(query_text, context, chat_history)
+    print("API call time: ", time.time()-st)
     # print(openai_response.choices[0].message.content)
-    # Process and return the document content as a response
     return {"result": openai_response.choices[0].message.content}
