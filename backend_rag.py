@@ -12,7 +12,7 @@ from langchain_community.docstore.in_memory import InMemoryDocstore
 from fastapi import FastAPI
 from pydantic import BaseModel
 from openai import OpenAI
-
+import os
 # Define FastAPI app
 app = FastAPI()
 
@@ -36,7 +36,7 @@ def query_openai_api(query: str, context: str):
     prompt = f"User question: {query}\n\nRelevant context: {context}\n\nAnswer based on the context:"
     client = OpenAI(
     # This is the default and can be omitted
-    api_key="xx",
+    api_key=os.environ.get('OPENAI_KEY'),
 )
     response = client.chat.completions.create(
         model="gpt-4o-mini",  # or "gpt-4", depending on your access
